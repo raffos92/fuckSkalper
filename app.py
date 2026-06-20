@@ -20,6 +20,7 @@ app = Flask(__name__, static_folder="static", static_url_path="")
 def row_to_monitor(row) -> dict:
     d = dict(row)
     d["marketplaces"] = json.loads(d["marketplaces"] or "[]")
+    d["last_marketplace_errors"] = json.loads(d.get("last_marketplace_errors") or "[]")
     d["sold_by_amazon"] = bool(d["sold_by_amazon"])
     d["enabled"] = bool(d["enabled"])
     return d
@@ -28,6 +29,7 @@ def row_to_monitor(row) -> dict:
 def row_to_bundle(row) -> dict:
     d = dict(row)
     d["marketplaces"] = json.loads(d["marketplaces"] or "[]")
+    d["last_marketplace_errors"] = json.loads(d.get("last_marketplace_errors") or "[]")
     d["sold_by_amazon"] = bool(d["sold_by_amazon"])
     d["enabled"] = bool(d["enabled"])
     return d
@@ -71,6 +73,10 @@ def create_monitor():
         return jsonify({"error": "Seleziona almeno un marketplace"}), 400
     if mtype == "url" and not (data.get("url") or "").strip():
         return jsonify({"error": "L'URL è obbligatoria"}), 400
+    if mtype == "asin" and not (data.get("keyword") or "").strip():
+        return jsonify({"error": "L'ASIN è obbligatorio"}), 400
+    if mtype == "asin" and not data.get("marketplaces"):
+        return jsonify({"error": "Seleziona almeno un marketplace"}), 400
 
     conn = get_db()
     poll_interval = data.get("poll_interval_seconds")

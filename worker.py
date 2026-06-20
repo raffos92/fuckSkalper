@@ -4,13 +4,13 @@ confronta con i prodotti già visti (DB) e notifica solo le novità reali.
 
 import json
 import time
+import random
 import logging
 import threading
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from db import get_db, now_iso, add_log, get_settings
-from scraper import build_search_url, fetch_page, parse_results
+from scraper import build_search_url, build_asin_url, fetch_page, parse_results, parse_product_page
 from notifier import send_telegram, format_product_message
 
 log = logging.getLogger("worker")
@@ -24,6 +24,11 @@ def _expand_source(source_type: str, row: dict) -> list[dict]:
     jobs = []
     if source_type == "monitor" and row["type"] == "url":
         jobs.append({"marketplace": "custom", "url": row["url"]})
+    elif source_type == "monitor" and row["type"] == "asin":
+        marketplaces = json.loads(row["marketplaces"] or "[]")
+        for mkt in marketplaces:
+            url = build_asin_url(row["keyword"], mkt)
+            jobs.append({"marketplace": mkt, "url": url, "asin": row["keyword"]})
     else:
         marketplaces = json.loads(row["marketplaces"] or "[]")
         for mkt in marketplaces:
@@ -42,22 +47,25 @@ def _check_source(source_type: str, source_id: str, name: str, row: dict, settin
     search_type = row["search_type"] if source_type == "bundle" or row.get("type") == "keyword" else "normal"
     kw = row.get("keyword") if (source_type == "bundle" or row.get("type") == "keyword") else None
 
-    # Fase 1: fetch parallele — marketplace diversi = server diversi, sicuro fare in parallelo
-    def fetch_job(job):
-        return job, fetch_page(job["url"])
-
+    # Fetch sequenziali con delay random — riduce il rischio di ban Amazon
     had_error = False
     parsed = []
+    fetch_errors = []
 
-    with ThreadPoolExecutor(max_workers=6) as executor:
-        futures = {executor.submit(fetch_job, job): job for job in jobs}
-        for future in as_completed(futures):
-            job, html = future.result()
-            if html is None:
-                had_error = True
-                continue
+    for i, job in enumerate(jobs):
+        if i > 0:
+            time.sleep(random.uniform(2.0, 4.5))
+        html = fetch_page(job["url"])
+        if html is None:
+            had_error = True
+            fetch_errors.append(job["marketplace"])
+            continue
+        if "asin" in job:
+            p = parse_product_page(html, job["url"], job["asin"])
+            products = [p] if p else []
+        else:
             products = parse_results(html, job["url"], search_type, keyword=kw)
-            parsed.append((job["marketplace"], products))
+        parsed.append((job["marketplace"], products))
 
     # Fase 2: scrittura DB — connessione breve, nessuna rete aperta
     total_new = 0
@@ -85,7 +93,10 @@ def _check_source(source_type: str, source_id: str, name: str, row: dict, settin
     conn.commit()
     conn.close()
 
-    # Fase 3: notifiche Telegram — nessuna connessione DB aperta
+    # Fase 3: log errori fetch + notifiche Telegram — nessuna connessione DB aperta
+    for mkt in fetch_errors:
+        add_log("error", f"{name} [{mkt}] → fetch fallita (Amazon blocca o timeout)")
+
     for marketplace, p, seen_at in new_for_notify:
         msg = format_product_message(name, marketplace, p, seen_at)
         ok = send_telegram(settings.get("telegram_token", ""), settings.get("telegram_chat_id", ""), msg)
@@ -94,12 +105,14 @@ def _check_source(source_type: str, source_id: str, name: str, row: dict, settin
             add_log("error", f"Notifica Telegram fallita per {name}")
 
     # Fase 4: aggiorna stato sorgente
-    status = "error" if had_error and total_new == 0 else ("found" if total_new > 0 else "watching")
+    all_failed = bool(fetch_errors) and len(fetch_errors) == len(jobs)
+    some_failed = bool(fetch_errors) and not all_failed
+    status = "found" if total_new > 0 else ("error" if all_failed else ("warning" if some_failed else "watching"))
     table = "monitors" if source_type == "monitor" else "bundles"
     conn = get_db()
     conn.execute(
-        f"UPDATE {table} SET last_check=?, last_status=?, found_count=found_count+? WHERE id=?",
-        (now_iso(), status, total_new, source_id),
+        f"UPDATE {table} SET last_check=?, last_status=?, found_count=found_count+?, last_marketplace_errors=? WHERE id=?",
+        (now_iso(), status, total_new, json.dumps(fetch_errors), source_id),
     )
     conn.commit()
     conn.close()

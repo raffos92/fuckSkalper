@@ -123,10 +123,15 @@ def init_db():
         )
 
     # Migrazione: aggiunge colonne mancanti al DB esistente
-    try:
-        cur.execute("ALTER TABLE monitors ADD COLUMN poll_interval_seconds INTEGER DEFAULT NULL")
-    except Exception:
-        pass  # colonna già presente
+    for migration in [
+        "ALTER TABLE monitors ADD COLUMN poll_interval_seconds INTEGER DEFAULT NULL",
+        "ALTER TABLE monitors ADD COLUMN last_marketplace_errors TEXT DEFAULT '[]'",
+        "ALTER TABLE bundles ADD COLUMN last_marketplace_errors TEXT DEFAULT '[]'",
+    ]:
+        try:
+            cur.execute(migration)
+        except Exception:
+            pass  # colonna già presente
 
     conn.commit()
     conn.close()

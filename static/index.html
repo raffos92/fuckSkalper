@@ -69,7 +69,7 @@
   .pill-mkt { font-family: monospace; background: #252932; color: #9CA3AF; }
   .chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
 
-  .type-choice { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .type-choice { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
   .type-opt { text-align: left; padding: 12px; border-radius: 10px; border: 1px solid var(--card-border); background: transparent; cursor: pointer; }
   .type-opt.sel { border-color: #F59E0B80; background: var(--amber-soft); }
   .type-opt .t { font-size: 13px; font-weight: 600; color: #fff; }
@@ -187,8 +187,24 @@ function mktPills(codes) {
   }).join("")}</div>`;
 }
 
-function statusColor(s) {
-  return { watching: "var(--blue)", found: "var(--green)", disabled: "var(--dim)", error: "var(--red)" }[s] || "var(--dim)";
+const LEVEL_COLOR = {
+  found:    "var(--green)",
+  watching: "var(--blue)",
+  check:    "var(--blue)",
+  warning:  "var(--amber)",
+  error:    "var(--red)",
+  disabled: "var(--dim)",
+  info:     "var(--dim)",
+};
+function levelColor(s) { return LEVEL_COLOR[s] || "var(--dim)"; }
+
+function mktPillsWithStatus(codes, errors) {
+  errors = errors || [];
+  return `<div class="chip-row">${codes.map(c => {
+    const m = MARKETPLACES[c];
+    const failed = errors.includes(c);
+    return `<span class="pill pill-mkt" style="${failed ? 'background:rgba(239,68,68,0.15); color:var(--red); border:1px solid rgba(239,68,68,0.3)' : ''}">${m ? m.flag : ""} ${c}</span>`;
+  }).join("")}</div>`;
 }
 
 // ── Render router ──────────────────────────────────────────────────────────
@@ -244,13 +260,13 @@ function renderDashboard() {
         allSources.map((src, i) => `
           <div class="row between" style="padding:12px 16px; ${i < allSources.length - 1 ? 'border-bottom:1px solid var(--line)' : ''}">
             <div class="row" style="gap:10px; min-width:0; flex:1">
-              <span class="dot ${src.last_status === 'found' ? 'pulse' : ''}" style="background:${statusColor(src.last_status)}"></span>
+              <span class="dot ${src.last_status === 'found' ? 'pulse' : ''}" style="background:${levelColor(src.last_status)}"></span>
               <div style="min-width:0">
                 <div style="font-size:13px; color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">${src.name}</div>
                 <div style="font-size:11px; color:var(--dim)">${src.last_check ? new Date(src.last_check).toLocaleTimeString('it-IT') : 'mai controllato'}</div>
               </div>
             </div>
-            ${mktPills(src.marketplaces || [])}
+            ${mktPillsWithStatus(src.marketplaces || [], src.last_marketplace_errors || [])}
             ${src.found_count > 0 ? `<span class="pill" style="background:rgba(16,185,129,0.15); color:var(--green)">+${src.found_count}</span>` : ""}
           </div>`).join("")}
     </div>
@@ -261,7 +277,7 @@ function renderDashboard() {
         state.logs.map(l => `
           <div class="log-row" style="padding-left:16px; padding-right:16px">
             <span class="log-time">${new Date(l.ts).toLocaleTimeString('it-IT')}</span>
-            <span class="log-dot" style="background:${l.level === 'found' ? 'var(--green)' : l.level === 'error' ? 'var(--red)' : 'var(--dim)'}"></span>
+            <span class="log-dot" style="background:${levelColor(l.level)}"></span>
             <span class="log-msg">${l.message}</span>
           </div>`).join("")}
     </div>
@@ -279,7 +295,7 @@ function renderMonitors() {
         <div class="card monitor-card ${m.last_status === 'found' ? 'found' : ''} ${!m.enabled ? 'off' : ''}">
           <div class="row between" style="margin-bottom:12px">
             <div class="row" style="gap:8px; min-width:0">
-              <span class="dot ${m.last_status === 'found' && m.enabled ? 'pulse' : ''}" style="background:${m.enabled ? statusColor(m.last_status) : 'var(--dim)'}"></span>
+              <span class="dot ${m.last_status === 'found' && m.enabled ? 'pulse' : ''}" style="background:${m.enabled ? levelColor(m.last_status) : 'var(--dim)'}"></span>
               <span style="font-size:13px; font-weight:500; color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">${m.name}</span>
             </div>
             <div class="row" style="gap:8px; flex-shrink:0">
@@ -289,7 +305,7 @@ function renderMonitors() {
             </div>
           </div>
           <div class="detail-row"><span class="detail-label">Ricerca</span>
-            <span class="kw-pill">${m.type === 'keyword' ? '"' + m.keyword + '"' : 'URL diretta'}</span></div>
+            <span class="kw-pill">${m.type === 'keyword' ? '"' + m.keyword + '"' : m.type === 'asin' ? 'ASIN: ' + m.keyword : 'URL diretta'}</span></div>
           <div class="detail-row"><span class="detail-label">Mercati</span>${mktPills(m.marketplaces)}</div>
           <div class="detail-row">
             <span class="detail-label">Filtri</span>
@@ -327,18 +343,22 @@ function renderAdd() {
       <div class="type-choice">
         <button class="type-opt ${addState.type === 'keyword' ? 'sel' : ''}" data-add-type="keyword">
           <div class="t">Parola chiave</div><div class="d">Cerca per nome/codice</div></button>
+        <button class="type-opt ${addState.type === 'asin' ? 'sel' : ''}" data-add-type="asin">
+          <div class="t">ASIN</div><div class="d">Prodotto specifico</div></button>
         <button class="type-opt ${addState.type === 'url' ? 'sel' : ''}" data-add-type="url">
           <div class="t">URL diretta</div><div class="d">Incolla link Amazon</div></button>
       </div>
     </div>
 
     <div class="card">
-      <label class="field-label">${addState.type === 'keyword' ? 'Parola chiave' : 'URL Amazon'}</label>
-      <input type="text" id="add-value" placeholder="${addState.type === 'keyword' ? 'es. CX-18 takaratomy' : 'https://www.amazon.co.jp/s?k=...'}"
-             value="${addState.type === 'keyword' ? addState.keyword : addState.url}">
+      <label class="field-label">${addState.type === 'keyword' ? 'Parola chiave' : addState.type === 'asin' ? 'ASIN Amazon' : 'URL Amazon'}</label>
+      <input type="text" id="add-value"
+        placeholder="${addState.type === 'keyword' ? 'es. CX-18 takaratomy' : addState.type === 'asin' ? 'es. B0D91K2WMS' : 'https://www.amazon.co.jp/s?k=...'}"
+        value="${addState.type === 'url' ? addState.url : addState.keyword}">
+      ${addState.type === 'asin' ? `<div style="font-size:11px; color:var(--muted); margin-top:6px">Trovi l'ASIN nell'URL del prodotto: amazon.co.jp/dp/<span style="color:var(--amber)">B0D91K2WMS</span></div>` : ''}
     </div>
 
-    ${addState.type === 'keyword' ? `
+    ${addState.type !== 'url' ? `
     <div class="card">
       <div class="row between" style="margin-bottom:12px">
         <div class="section-label" style="margin:0">Marketplace</div>
@@ -352,6 +372,7 @@ function renderAdd() {
       </div>
     </div>` : ""}
 
+    ${addState.type !== 'asin' ? `
     <div class="card">
       <div class="section-label">Filtri</div>
       <div class="row between" style="margin-bottom:14px">
@@ -369,7 +390,7 @@ function renderAdd() {
           `).join("")}
         </div>
       </div>
-    </div>
+    </div>` : ''}
 
     <div class="card">
       <div class="section-label">Frequenza di check</div>
@@ -574,8 +595,8 @@ function attachHandlers() {
   if (nameInput) nameInput.oninput = e => addState.name = e.target.value;
   const valueInput = document.getElementById("add-value");
   if (valueInput) valueInput.oninput = e => {
-    if (addState.type === "keyword") addState.keyword = e.target.value;
-    else addState.url = e.target.value;
+    if (addState.type === "url") addState.url = e.target.value;
+    else addState.keyword = e.target.value;
   };
 
   const saveBtn = document.getElementById("add-save-btn");

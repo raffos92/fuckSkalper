@@ -56,6 +56,43 @@ SPONSORED_TEXTS = frozenset({
 })
 
 
+def build_asin_url(asin: str, marketplace_code: str) -> str:
+    mkt = MARKETPLACES[marketplace_code]
+    return f"https://www.{mkt['domain']}/dp/{asin}"
+
+
+def parse_product_page(html: str, base_url: str, asin: str) -> dict | None:
+    soup = BeautifulSoup(html, "html.parser")
+
+    title_el = soup.select_one("#productTitle")
+    if not title_el:
+        return None
+    title = title_el.get_text(strip=True)
+    if not title:
+        return None
+
+    price_el = soup.select_one(".a-price .a-offscreen") or soup.select_one("#priceblock_ourprice")
+    price = price_el.get_text(strip=True) if price_el else "—"
+
+    avail_el = soup.select_one("#availability span")
+    if avail_el:
+        avail_text = avail_el.get_text(strip=True).lower()
+        unavailable = ["currently unavailable", "non disponibile", "nicht verfügbar",
+                       "actuellement indisponible", "現在在庫切れ", "取り扱いがありません"]
+        if any(k in avail_text for k in unavailable):
+            log.debug(f"ASIN {asin} non disponibile: {avail_text}")
+            return None
+
+    domain = base_url.split("/dp/")[0]
+    return {
+        "asin": asin,
+        "title": title,
+        "price": price,
+        "url": f"{domain}/dp/{asin}",
+        "is_deal": False,
+    }
+
+
 def build_search_url(keyword: str, marketplace_code: str, sold_by_amazon: bool, search_type: str) -> str:
     mkt = MARKETPLACES[marketplace_code]
     url = f"https://www.{mkt['domain']}/s?k={quote(keyword)}"
