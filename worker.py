@@ -51,6 +51,7 @@ def _check_source(source_type: str, source_id: str, name: str, row: dict, settin
     had_error = False
     parsed = []
     fetch_errors = []
+    asin_unavailable = []  # job ASIN con fetch ok ma prodotto non disponibile
 
     for i, job in enumerate(jobs):
         if i > 0:
@@ -63,6 +64,8 @@ def _check_source(source_type: str, source_id: str, name: str, row: dict, settin
         if "asin" in job:
             p = parse_product_page(html, job["url"], job["asin"])
             products = [p] if p else []
+            if not products:
+                asin_unavailable.append((job["marketplace"], job["asin"]))
         else:
             products = parse_results(html, job["url"], search_type, keyword=kw)
         parsed.append((job["marketplace"], products))
@@ -72,6 +75,26 @@ def _check_source(source_type: str, source_id: str, name: str, row: dict, settin
     new_for_notify = []
 
     conn = get_db()
+    # ASIN non disponibili: rimuovi da seen_products così al prossimo restock ri-notifica
+    for marketplace, asin in asin_unavailable:
+        conn.execute(
+            "DELETE FROM seen_products WHERE source_type=? AND source_id=? AND marketplace=? AND asin=?",
+            (source_type, str(source_id), marketplace, asin),
+        )
+
+    # Keyword/bundle reset: ASIN spariti dai risultati → cancella da seen_products
+    # Skip marketplace con 0 risultati (possibile CAPTCHA restituito come 200)
+    if not (source_type == "monitor" and row.get("type") == "asin"):
+        for marketplace, products in parsed:
+            if not products:
+                continue
+            current_asins = tuple(p["asin"] for p in products)
+            placeholders = ",".join("?" * len(current_asins))
+            conn.execute(
+                f"DELETE FROM seen_products WHERE source_type=? AND source_id=? AND marketplace=? AND asin NOT IN ({placeholders})",
+                (source_type, str(source_id), marketplace) + current_asins,
+            )
+
     for marketplace, products in parsed:
         for p in products:
             already_seen = conn.execute(
