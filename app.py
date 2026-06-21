@@ -10,6 +10,7 @@ from flask import Flask, request, jsonify, send_from_directory
 from db import init_db, get_db, now_iso, get_settings, set_setting
 from marketplaces import MARKETPLACES
 from worker import start_worker_thread
+from bot import start_bot_thread
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("app")
@@ -243,5 +244,6 @@ if __name__ == "__main__":
     # Evita doppio avvio del worker col reloader di Flask in debug mode
     if os.environ.get("WERKZEUG_RUN_MAIN") != "true":
         start_worker_thread()
-        log.info("Worker in background avviato")
+        start_bot_thread()
+        log.info("Worker e bot Telegram avviati")
     app.run(host="0.0.0.0", port=5050, debug=False)
