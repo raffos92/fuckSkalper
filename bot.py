@@ -137,11 +137,15 @@ def _cmd_watch(query: str) -> str:
 
 
 _HELP = (
-    "Comandi disponibili:\n"
+    "Comandi disponibili:\n\n"
     "/lista — monitor e pacchetti attivi\n"
     "/stato — worker status + log recenti\n"
-    "/watch <ASIN o keyword> — aggiungi monitor rapido\n"
-    "/help — questo messaggio"
+    "/help — questo messaggio\n\n"
+    "/watch — aggiungi monitor rapido:\n"
+    "  ASIN:    /watch B0FH795GZ8 Scale Shark\n"
+    "           (nome opzionale dopo l'ASIN)\n"
+    "  Keyword: /watch valor bison beyblade x\n"
+    "           (il nome coincide con la keyword)"
 )
 
 
