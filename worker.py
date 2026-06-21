@@ -10,7 +10,7 @@ import threading
 from datetime import datetime
 
 from db import get_db, now_iso, add_log, get_settings
-from scraper import build_search_url, build_asin_url, fetch_page, parse_results, parse_product_page
+from scraper import build_search_url, build_asin_url, fetch_page, parse_results, parse_product_page, is_captcha_page
 from notifier import send_telegram, format_product_message
 
 log = logging.getLogger("worker")
@@ -58,6 +58,11 @@ def _check_source(source_type: str, source_id: str, name: str, row: dict, settin
             time.sleep(random.uniform(2.0, 4.5))
         html = fetch_page(job["url"])
         if html is None:
+            had_error = True
+            fetch_errors.append(job["marketplace"])
+            continue
+        if is_captcha_page(html):
+            log.warning(f"CAPTCHA rilevato su {job['marketplace']} — trattato come fetch fallita")
             had_error = True
             fetch_errors.append(job["marketplace"])
             continue

@@ -103,6 +103,26 @@ def build_search_url(keyword: str, marketplace_code: str, sold_by_amazon: bool, 
     return url
 
 
+_CAPTCHA_MARKERS = (
+    "validateCaptcha",
+    "Robot Check",
+    "Type the characters you see",
+    "Enter the characters you see",
+    "we just need to make sure you're not a robot",
+    "Skriv tegnene du ser",  # amazon.se
+    "Scrivi i caratteri che vedi",  # amazon.it
+    "Saisissez les caractères",  # amazon.fr
+    "Geben Sie die Zeichen ein",  # amazon.de
+)
+
+
+def is_captcha_page(html: str) -> bool:
+    for marker in _CAPTCHA_MARKERS:
+        if marker in html:
+            return True
+    return False
+
+
 def fetch_page(url: str, max_retries: int = 2) -> str | None:
     for attempt in range(max_retries + 1):
         headers = {**BASE_HEADERS, **random.choice(HEADERS_POOL)}
