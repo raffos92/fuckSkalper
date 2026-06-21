@@ -98,27 +98,30 @@ def _cmd_watch(query: str) -> str:
     if not query:
         return (
             "❌ Specifica un ASIN o una keyword.\n"
-            "Es: /watch B0FH795GZ8\n"
-            "Es: /watch valor bison beyblade x"
+            "ASIN: /watch B0FH795GZ8 Scale Shark\n"
+            "Keyword: /watch valor bison beyblade x"
         )
 
     mkts_json = json.dumps(ALL_MARKETPLACES)
     mkts_str = "/".join(ALL_MARKETPLACES)
     conn = get_db()
 
-    if ASIN_RE.match(query.upper()):
-        asin = query.upper()
+    # Se il primo token è un ASIN, il resto è il nome opzionale
+    first_token = query.split()[0].upper()
+    if ASIN_RE.match(first_token):
+        asin = first_token
+        name = query[len(first_token):].strip() or asin
         conn.execute(
             """INSERT INTO monitors
                (name, type, keyword, url, marketplaces, sold_by_amazon, search_type,
                 enabled, created_at, last_status, poll_interval_seconds)
                VALUES (?, 'asin', ?, '', ?, 1, 'normal', 1, ?, 'watching', NULL)""",
-            (asin, asin, mkts_json, now_iso()),
+            (name, asin, mkts_json, now_iso()),
         )
         conn.commit()
         conn.close()
-        add_log("info", f"Bot: monitor ASIN {asin} aggiunto")
-        return f"✅ Monitor aggiunto\nTipo: ASIN · {asin}\nMercati: {mkts_str}"
+        add_log("info", f"Bot: monitor ASIN {asin} ({name}) aggiunto")
+        return f"✅ Monitor aggiunto\nNome: {name}\nTipo: ASIN · {asin}\nMercati: {mkts_str}"
     else:
         conn.execute(
             """INSERT INTO monitors
@@ -130,7 +133,7 @@ def _cmd_watch(query: str) -> str:
         conn.commit()
         conn.close()
         add_log("info", f"Bot: monitor keyword '{query}' aggiunto")
-        return f"✅ Monitor aggiunto\nTipo: keyword · \"{query}\"\nMercati: {mkts_str}"
+        return f"✅ Monitor aggiunto\nNome: {query}\nTipo: keyword · \"{query}\"\nMercati: {mkts_str}"
 
 
 _HELP = (
