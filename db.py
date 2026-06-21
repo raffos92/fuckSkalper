@@ -127,6 +127,7 @@ def init_db():
         "ALTER TABLE monitors ADD COLUMN poll_interval_seconds INTEGER DEFAULT NULL",
         "ALTER TABLE monitors ADD COLUMN last_marketplace_errors TEXT DEFAULT '[]'",
         "ALTER TABLE bundles ADD COLUMN last_marketplace_errors TEXT DEFAULT '[]'",
+        "ALTER TABLE seen_products ADD COLUMN absent_cycles INTEGER NOT NULL DEFAULT 0",
     ]:
         try:
             cur.execute(migration)

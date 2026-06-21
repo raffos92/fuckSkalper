@@ -75,24 +75,38 @@ def _check_source(source_type: str, source_id: str, name: str, row: dict, settin
     new_for_notify = []
 
     conn = get_db()
-    # ASIN non disponibili: rimuovi da seen_products così al prossimo restock ri-notifica
+    is_asin_monitor = source_type == "monitor" and row.get("type") == "asin"
+
+    # ASIN monitor: prodotto non disponibile → incrementa contatore, elimina dopo 3 cicli
     for marketplace, asin in asin_unavailable:
         conn.execute(
-            "DELETE FROM seen_products WHERE source_type=? AND source_id=? AND marketplace=? AND asin=?",
+            "UPDATE seen_products SET absent_cycles=absent_cycles+1 WHERE source_type=? AND source_id=? AND marketplace=? AND asin=?",
+            (source_type, str(source_id), marketplace, asin),
+        )
+        conn.execute(
+            "DELETE FROM seen_products WHERE source_type=? AND source_id=? AND marketplace=? AND asin=? AND absent_cycles >= 3",
             (source_type, str(source_id), marketplace, asin),
         )
 
-    # Keyword/bundle reset: ASIN spariti dai risultati → cancella da seen_products
+    # Keyword/bundle: incrementa contatore per assenti, azzera per presenti, elimina dopo 3 cicli
     # Skip marketplace con 0 risultati (possibile CAPTCHA restituito come 200)
-    if not (source_type == "monitor" and row.get("type") == "asin"):
+    if not is_asin_monitor:
         for marketplace, products in parsed:
             if not products:
                 continue
             current_asins = tuple(p["asin"] for p in products)
             placeholders = ",".join("?" * len(current_asins))
             conn.execute(
-                f"DELETE FROM seen_products WHERE source_type=? AND source_id=? AND marketplace=? AND asin NOT IN ({placeholders})",
+                f"UPDATE seen_products SET absent_cycles=0 WHERE source_type=? AND source_id=? AND marketplace=? AND asin IN ({placeholders})",
                 (source_type, str(source_id), marketplace) + current_asins,
+            )
+            conn.execute(
+                f"UPDATE seen_products SET absent_cycles=absent_cycles+1 WHERE source_type=? AND source_id=? AND marketplace=? AND asin NOT IN ({placeholders})",
+                (source_type, str(source_id), marketplace) + current_asins,
+            )
+            conn.execute(
+                "DELETE FROM seen_products WHERE source_type=? AND source_id=? AND marketplace=? AND absent_cycles >= 3",
+                (source_type, str(source_id), marketplace),
             )
 
     for marketplace, products in parsed:
@@ -102,6 +116,11 @@ def _check_source(source_type: str, source_id: str, name: str, row: dict, settin
                 (source_type, str(source_id), marketplace, p["asin"]),
             ).fetchone()
             if already_seen:
+                if is_asin_monitor:
+                    conn.execute(
+                        "UPDATE seen_products SET absent_cycles=0 WHERE source_type=? AND source_id=? AND marketplace=? AND asin=?",
+                        (source_type, str(source_id), marketplace, p["asin"]),
+                    )
                 continue
             seen_at = now_iso()
             conn.execute(
