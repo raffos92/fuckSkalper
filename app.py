@@ -203,6 +203,42 @@ def test_telegram():
     return jsonify({"ok": ok})
 
 
+# ── Blacklist ─────────────────────────────────────────────────────────────────
+
+@app.route("/api/blacklist", methods=["GET"])
+def list_blacklist():
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM blacklist ORDER BY added_at DESC").fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route("/api/blacklist", methods=["POST"])
+def add_blacklist():
+    data = request.get_json(force=True)
+    asin = (data.get("asin") or "").strip().upper()
+    title = (data.get("title") or "").strip()
+    if not asin:
+        return jsonify({"error": "ASIN obbligatorio"}), 400
+    conn = get_db()
+    conn.execute(
+        "INSERT OR IGNORE INTO blacklist (asin, title, added_at) VALUES (?, ?, ?)",
+        (asin, title or asin, now_iso()),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True}), 201
+
+
+@app.route("/api/blacklist/<asin>", methods=["DELETE"])
+def remove_blacklist(asin):
+    conn = get_db()
+    conn.execute("DELETE FROM blacklist WHERE asin=?", (asin.upper(),))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+
 # ── Logs & Stats ──────────────────────────────────────────────────────────────
 
 @app.route("/api/logs")

@@ -84,6 +84,12 @@ def init_db():
         key TEXT PRIMARY KEY,
         value TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS blacklist (
+        asin TEXT PRIMARY KEY,
+        title TEXT,
+        added_at TEXT
+    );
     """)
 
     # Settings di default

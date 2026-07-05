@@ -127,6 +127,11 @@ def _check_source(source_type: str, source_id: str, name: str, row: dict, settin
                         (source_type, str(source_id), marketplace, p["asin"]),
                     )
                 continue
+            blacklisted = conn.execute(
+                "SELECT 1 FROM blacklist WHERE asin=?", (p["asin"],)
+            ).fetchone()
+            if blacklisted:
+                continue
             seen_at = now_iso()
             conn.execute(
                 """INSERT INTO seen_products

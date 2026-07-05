@@ -136,6 +136,48 @@ def _cmd_watch(query: str) -> str:
         return f"✅ Monitor aggiunto\nNome: {query}\nTipo: keyword · \"{query}\"\nMercati: {mkts_str}"
 
 
+def _cmd_blacklist(msg: dict, name: str = "") -> str:
+    reply_to = msg.get("reply_to_message")
+    if not reply_to:
+        return (
+            "❌ Rispondi a una notifica del bot con /blacklist per bloccare quell'ASIN.\n"
+            "Puoi anche aggiungere ASIN manualmente dal pannello web → Blacklist."
+        )
+
+    entities = reply_to.get("entities", [])
+    text = reply_to.get("text", "")
+
+    asin = None
+    for ent in entities:
+        if ent.get("type") == "text_link":
+            url = ent.get("url", "")
+            m = re.search(r"/dp/([A-Z0-9]{10})", url)
+            if m and ASIN_RE.match(m.group(1)):
+                asin = m.group(1)
+                break
+
+    if not asin:
+        return "❌ Non riesco a trovare l'ASIN nella notifica. Assicurati di rispondere a un messaggio di prodotto del bot."
+
+    title = None
+    for line in text.split("\n"):
+        if line.startswith("🏷 "):
+            title = line[len("🏷 "):]
+            break
+
+    conn = get_db()
+    final_title = name.strip() or title or asin
+    conn.execute(
+        "INSERT OR IGNORE INTO blacklist (asin, title, added_at) VALUES (?, ?, ?)",
+        (asin, final_title, now_iso()),
+    )
+    conn.commit()
+    conn.close()
+    add_log("info", f"Blacklist: ASIN {asin} aggiunto via bot")
+    label_line = f"\n📦 {final_title}" if final_title != asin else ""
+    return f"🚫 ASIN {asin} bloccato.{label_line}\nNon riceverai più notifiche per questo prodotto."
+
+
 _HELP = (
     "Comandi disponibili:\n\n"
     "/lista — monitor e pacchetti attivi\n"
@@ -145,11 +187,13 @@ _HELP = (
     "  ASIN:    /watch B0FH795GZ8 Scale Shark\n"
     "           (nome opzionale dopo l'ASIN)\n"
     "  Keyword: /watch valor bison beyblade x\n"
-    "           (il nome coincide con la keyword)"
+    "           (il nome coincide con la keyword)\n\n"
+    "/blacklist — rispondi a una notifica del bot\n"
+    "           per bloccare quell'ASIN"
 )
 
 
-def _dispatch(token: str, chat_id, allowed_chat_id: str, text: str):
+def _dispatch(token: str, chat_id, allowed_chat_id: str, text: str, msg: dict | None = None):
     if str(chat_id) != str(allowed_chat_id):
         return
 
@@ -164,6 +208,8 @@ def _dispatch(token: str, chat_id, allowed_chat_id: str, text: str):
         _send(token, chat_id, _cmd_stato())
     elif cmd == "/watch":
         _send(token, chat_id, _cmd_watch(arg))
+    elif cmd == "/blacklist":
+        _send(token, chat_id, _cmd_blacklist(msg or {}, arg))
     elif cmd in ("/help", "/start"):
         _send(token, chat_id, _HELP)
 
@@ -189,7 +235,7 @@ def run_bot_loop():
                 text = msg.get("text", "")
                 from_chat = msg.get("chat", {}).get("id")
                 if text and from_chat:
-                    _dispatch(token, from_chat, chat_id, text)
+                    _dispatch(token, from_chat, chat_id, text, msg)
         except Exception as e:
             log.exception(f"Errore bot loop: {e}")
             _stop_event.wait(5)

@@ -138,13 +138,14 @@
 <script>
 const API = "";
 let MARKETPLACES = {};
-let state = { section: "dashboard", monitors: [], bundles: [], settings: {}, stats: {}, logs: [] };
+let state = { section: "dashboard", monitors: [], bundles: [], settings: {}, stats: {}, logs: [], blacklist: [] };
 
 const NAV_ITEMS = [
   { id: "dashboard", icon: "◈", label: "Dashboard" },
   { id: "monitors",  icon: "⊡", label: "I miei Monitor", badged: true },
   { id: "add",       icon: "+", label: "Aggiungi Monitor" },
   { id: "bundles",   icon: "❋", label: "Pacchetti" },
+  { id: "blacklist", icon: "🚫", label: "Blacklist", badged: true },
   { id: "settings",  icon: "◎", label: "Impostazioni" },
 ];
 
@@ -168,12 +169,13 @@ async function api(path, opts = {}) {
 }
 
 async function loadAll() {
-  const [monitors, bundles, settings, stats, logs, mkts] = await Promise.all([
+  const [monitors, bundles, settings, stats, logs, mkts, blacklist] = await Promise.all([
     api("/api/monitors"), api("/api/bundles"), api("/api/settings"),
     api("/api/stats"), api("/api/logs?limit=20"), api("/api/marketplaces"),
+    api("/api/blacklist"),
   ]);
   state.monitors = monitors; state.bundles = bundles; state.settings = settings;
-  state.stats = stats; state.logs = logs; MARKETPLACES = mkts;
+  state.stats = stats; state.logs = logs; MARKETPLACES = mkts; state.blacklist = blacklist;
   document.getElementById("last-cycle").textContent = "Polling ogni " + stats.poll_interval_seconds + "s";
   render();
 }
@@ -216,17 +218,21 @@ function render() {
   else if (state.section === "monitors") page.innerHTML = renderMonitors();
   else if (state.section === "add") page.innerHTML = renderAdd();
   else if (state.section === "bundles") page.innerHTML = renderBundles();
+  else if (state.section === "blacklist") page.innerHTML = renderBlacklist();
   else if (state.section === "settings") page.innerHTML = renderSettings();
   attachHandlers();
 }
 
 function renderNav() {
-  const activeCount = state.monitors.filter(m => m.enabled).length;
+  const badgeCounts = {
+    monitors: state.monitors.filter(m => m.enabled).length,
+    blacklist: state.blacklist.length,
+  };
   document.getElementById("nav").innerHTML = NAV_ITEMS.map(item => `
     <button class="nav-item ${state.section === item.id ? "active" : ""}" data-nav="${item.id}">
       <span class="ico">${item.icon}</span>
       <span class="label">${item.label}</span>
-      ${item.badged ? `<span class="nav-badge">${activeCount}</span>` : ""}
+      ${item.badged ? `<span class="nav-badge">${badgeCounts[item.id] ?? 0}</span>` : ""}
     </button>
   `).join("");
 }
@@ -462,6 +468,40 @@ function renderBundles() {
   `;
 }
 
+// ── Blacklist ──────────────────────────────────────────────────────────────
+
+function renderBlacklist() {
+  return `
+    <h1>Blacklist</h1>
+    <p class="subtitle">Prodotti bloccati — nessuna notifica per questi ASIN</p>
+
+    <div class="card">
+      <div class="section-label">Aggiungi manualmente</div>
+      <div style="display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap">
+        <input type="text" id="bl-asin" placeholder="ASIN (es. B0D91K2WMS)" style="flex:1; min-width:140px; margin:0; font-family:monospace; text-transform:uppercase">
+        <input type="text" id="bl-title" placeholder="Etichetta opzionale" style="flex:2; min-width:160px; margin:0">
+        <button class="btn" id="bl-add-btn" style="background:var(--red); color:#fff; white-space:nowrap">Blocca</button>
+      </div>
+      <div id="bl-error" class="error-msg"></div>
+    </div>
+
+    <div class="card" style="padding:0">
+      <div style="padding:14px 16px" class="section-label">ASIN bloccati (${state.blacklist.length})</div>
+      ${state.blacklist.length === 0
+        ? '<div class="empty">Nessun ASIN in blacklist</div>'
+        : state.blacklist.map(item => `
+          <div class="row between" style="padding:12px 16px; border-bottom:1px solid var(--line)">
+            <div style="min-width:0; flex:1">
+              <div style="font-size:13px; color:#fff; font-family:monospace">${item.asin}</div>
+              <div style="font-size:11px; color:var(--muted); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">${item.title !== item.asin ? item.title : ''}</div>
+              <div style="font-size:10px; color:var(--dim); margin-top:2px">${new Date(item.added_at).toLocaleString('it-IT')}</div>
+            </div>
+            <button class="btn-ghost" data-delete-blacklist="${item.asin}" title="Rimuovi da blacklist">✕</button>
+          </div>`).join('')}
+    </div>
+  `;
+}
+
 // ── Settings ───────────────────────────────────────────────────────────────
 
 function renderSettings() {
@@ -626,6 +666,28 @@ function attachHandlers() {
       errorEl.textContent = e.message;
     }
   };
+
+  // Blacklist
+  const blAddBtn = document.getElementById("bl-add-btn");
+  if (blAddBtn) blAddBtn.onclick = async () => {
+    const asin = (document.getElementById("bl-asin").value || "").trim().toUpperCase();
+    const title = (document.getElementById("bl-title").value || "").trim();
+    const errorEl = document.getElementById("bl-error");
+    errorEl.textContent = "";
+    if (!asin) { errorEl.textContent = "ASIN obbligatorio"; return; }
+    try {
+      await api("/api/blacklist", { method: "POST", body: JSON.stringify({ asin, title }) });
+      toast("ASIN bloccato ✓");
+      await loadAll();
+    } catch (e) { errorEl.textContent = e.message; }
+  };
+  document.querySelectorAll("[data-delete-blacklist]").forEach(el =>
+    el.onclick = async () => {
+      if (!confirm("Rimuovere dalla blacklist?")) return;
+      await api(`/api/blacklist/${el.dataset.deleteBlacklist}`, { method: "DELETE" });
+      toast("Rimosso dalla blacklist ✓");
+      await loadAll();
+    });
 
   // Settings
   const intervalSlider = document.getElementById("set-interval");
