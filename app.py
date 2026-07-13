@@ -7,7 +7,7 @@ import json
 import logging
 from flask import Flask, request, jsonify, send_from_directory
 
-from db import init_db, get_db, now_iso, get_settings, set_setting
+from db import init_db, get_db, now_iso, get_settings, set_setting, get_marketplace_health, reset_marketplace_health
 from marketplaces import MARKETPLACES
 from worker import start_worker_thread
 from bot import start_bot_thread
@@ -24,7 +24,24 @@ def row_to_monitor(row) -> dict:
     d["last_marketplace_errors"] = json.loads(d.get("last_marketplace_errors") or "[]")
     d["sold_by_amazon"] = bool(d["sold_by_amazon"])
     d["enabled"] = bool(d["enabled"])
+    d["priority"] = bool(d.get("priority", 0))
     return d
+
+
+def _priority_limit(exclude_id=None) -> tuple[int, int]:
+    """Ritorna (current_count, max_slots) per i monitor prioritari."""
+    settings = get_settings()
+    budget = int(settings.get("budget_per_cycle", "15") or 15)
+    max_slots = max(1, budget // 3)
+    conn = get_db()
+    q = "SELECT COUNT(*) c FROM monitors WHERE priority=1"
+    params = []
+    if exclude_id is not None:
+        q += " AND id!=?"
+        params.append(exclude_id)
+    count = conn.execute(q, params).fetchone()["c"]
+    conn.close()
+    return count, max_slots
 
 
 def row_to_bundle(row) -> dict:
@@ -79,14 +96,19 @@ def create_monitor():
     if mtype == "asin" and not data.get("marketplaces"):
         return jsonify({"error": "Seleziona almeno un marketplace"}), 400
 
+    if data.get("priority"):
+        count, max_slots = _priority_limit()
+        if count >= max_slots:
+            return jsonify({"error": f"Limite monitor prioritari raggiunto ({max_slots}/{max_slots}). Rimuovi la priorità da un monitor esistente prima di aggiungerne uno nuovo."}), 400
+
     conn = get_db()
     poll_interval = data.get("poll_interval_seconds")
     poll_interval = int(poll_interval) if poll_interval else None
 
     cur = conn.execute(
         """INSERT INTO monitors
-           (name, type, keyword, url, marketplaces, sold_by_amazon, search_type, enabled, created_at, last_status, poll_interval_seconds)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           (name, type, keyword, url, marketplaces, sold_by_amazon, search_type, enabled, created_at, last_status, poll_interval_seconds, priority)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             name, mtype,
             data.get("keyword", ""), data.get("url", ""),
@@ -97,6 +119,7 @@ def create_monitor():
             now_iso(),
             "watching",
             poll_interval,
+            int(bool(data.get("priority", False))),
         ),
     )
     conn.commit()
@@ -126,13 +149,22 @@ def update_monitor(monitor_id):
         fields["enabled"] = int(bool(data["enabled"]))
     if "poll_interval_seconds" in data:
         fields["poll_interval_seconds"] = int(data["poll_interval_seconds"]) if data["poll_interval_seconds"] else None
+    if "priority" in data:
+        new_priority = bool(data["priority"])
+        current_priority = bool(fields.get("priority", 0))
+        if new_priority and not current_priority:
+            count, max_slots = _priority_limit(exclude_id=monitor_id)
+            if count >= max_slots:
+                conn.close()
+                return jsonify({"error": f"Limite monitor prioritari raggiunto ({max_slots}/{max_slots}). Rimuovi la priorità da un monitor esistente prima di aggiungerne uno nuovo."}), 400
+        fields["priority"] = int(new_priority)
 
     conn.execute(
         """UPDATE monitors SET name=?, type=?, keyword=?, url=?, marketplaces=?,
-           sold_by_amazon=?, search_type=?, enabled=?, poll_interval_seconds=? WHERE id=?""",
+           sold_by_amazon=?, search_type=?, enabled=?, poll_interval_seconds=?, priority=? WHERE id=?""",
         (fields["name"], fields["type"], fields["keyword"], fields["url"], fields["marketplaces"],
          fields["sold_by_amazon"], fields["search_type"], fields["enabled"],
-         fields.get("poll_interval_seconds"), monitor_id),
+         fields.get("poll_interval_seconds"), fields.get("priority", 0), monitor_id),
     )
     conn.commit()
     conn.close()
@@ -186,7 +218,8 @@ def api_get_settings():
 @app.route("/api/settings", methods=["PUT"])
 def api_set_settings():
     data = request.get_json(force=True)
-    for key in ["telegram_token", "telegram_chat_id", "poll_interval_seconds"]:
+    for key in ["telegram_token", "telegram_chat_id", "poll_interval_seconds",
+                "budget_per_cycle", "autocalibration", "priority_reminder_days"]:
         if key in data:
             set_setting(key, str(data[key]))
     return jsonify({"ok": True})
@@ -201,6 +234,27 @@ def test_telegram():
     chat_id = data.get("telegram_chat_id") or settings.get("telegram_chat_id", "")
     ok = send_telegram(token, chat_id, "✅ Test riuscito! Amazon Monitor è collegato correttamente.")
     return jsonify({"ok": ok})
+
+
+# ── Marketplace Health ────────────────────────────────────────────────────────
+
+@app.route("/api/marketplace-health", methods=["GET"])
+def api_marketplace_health():
+    return jsonify(list(get_marketplace_health().values()))
+
+
+@app.route("/api/marketplace-health/reset", methods=["POST"])
+def api_reset_marketplace_health():
+    reset_marketplace_health()
+    return jsonify({"ok": True})
+
+
+# ── Priority info ─────────────────────────────────────────────────────────────
+
+@app.route("/api/priority-info", methods=["GET"])
+def api_priority_info():
+    count, max_slots = _priority_limit()
+    return jsonify({"count": count, "max_slots": max_slots})
 
 
 # ── Blacklist ─────────────────────────────────────────────────────────────────

@@ -138,7 +138,7 @@
 <script>
 const API = "";
 let MARKETPLACES = {};
-let state = { section: "dashboard", monitors: [], bundles: [], settings: {}, stats: {}, logs: [], blacklist: [] };
+let state = { section: "dashboard", monitors: [], bundles: [], settings: {}, stats: {}, logs: [], blacklist: [], health: [], priorityInfo: { count: 0, max_slots: 5 } };
 
 const NAV_ITEMS = [
   { id: "dashboard", icon: "◈", label: "Dashboard" },
@@ -169,13 +169,14 @@ async function api(path, opts = {}) {
 }
 
 async function loadAll() {
-  const [monitors, bundles, settings, stats, logs, mkts, blacklist] = await Promise.all([
+  const [monitors, bundles, settings, stats, logs, mkts, blacklist, health, priorityInfo] = await Promise.all([
     api("/api/monitors"), api("/api/bundles"), api("/api/settings"),
     api("/api/stats"), api("/api/logs?limit=20"), api("/api/marketplaces"),
-    api("/api/blacklist"),
+    api("/api/blacklist"), api("/api/marketplace-health"), api("/api/priority-info"),
   ]);
   state.monitors = monitors; state.bundles = bundles; state.settings = settings;
   state.stats = stats; state.logs = logs; MARKETPLACES = mkts; state.blacklist = blacklist;
+  state.health = health; state.priorityInfo = priorityInfo;
   document.getElementById("last-cycle").textContent = "Polling ogni " + stats.poll_interval_seconds + "s";
   render();
 }
@@ -277,6 +278,24 @@ function renderDashboard() {
           </div>`).join("")}
     </div>
 
+    ${state.health.length > 0 ? `
+    <div class="card" style="padding:0; margin-top:12px">
+      <div style="padding:14px 16px" class="section-label">Salute marketplace</div>
+      ${state.health.map(h => {
+        const rate = h.total_attempts > 0 ? Math.round(h.success_attempts / h.total_attempts * 100) : null;
+        const m = h.delay_multiplier;
+        const color = m <= 0.5 ? 'var(--green)' : m <= 1.5 ? 'var(--blue)' : m <= 3 ? 'var(--amber)' : 'var(--red)';
+        const mkt = MARKETPLACES[h.marketplace];
+        return `<div class="row between" style="padding:10px 16px; border-bottom:1px solid var(--line)">
+          <span style="font-family:monospace; font-size:13px; color:#fff">${mkt ? mkt.flag + ' ' : ''}${h.marketplace}</span>
+          <div class="row" style="gap:12px">
+            ${rate !== null ? `<span style="font-size:11px; color:var(--muted)">${rate}% ok</span>` : ''}
+            <span style="font-size:11px; font-family:monospace; color:${color}">×${m.toFixed(2)}</span>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>` : ''}
+
     <div class="card" style="padding:0; margin-top:12px">
       <div style="padding:14px 16px" class="section-label">Log recente</div>
       ${state.logs.length === 0 ? `<div class="empty">Nessuna attività ancora</div>` :
@@ -293,9 +312,10 @@ function renderDashboard() {
 // ── Monitors ───────────────────────────────────────────────────────────────
 
 function renderMonitors() {
+  const { count: pCount, max_slots: pMax } = state.priorityInfo;
   return `
     <h1>I miei Monitor</h1>
-    <p class="subtitle">${state.monitors.length} monitor configurati</p>
+    <p class="subtitle">${state.monitors.length} monitor configurati${pCount > 0 ? ` · <span style="color:var(--amber)">★ ${pCount}/${pMax} prioritari</span>` : ''}</p>
     ${state.monitors.length === 0 ? `<div class="card empty">Nessun monitor ancora. Vai su "Aggiungi Monitor" per crearne uno.</div>` :
       state.monitors.map(m => `
         <div class="card monitor-card ${m.last_status === 'found' ? 'found' : ''} ${!m.enabled ? 'off' : ''}">
@@ -306,6 +326,7 @@ function renderMonitors() {
             </div>
             <div class="row" style="gap:8px; flex-shrink:0">
               <button class="btn-ghost" style="color:var(--muted)" data-edit-monitor="${m.id}" title="Modifica">✎</button>
+              <button class="btn-ghost" data-priority-monitor="${m.id}" title="${m.priority ? 'Rimuovi priorità' : 'Imposta prioritario'}" style="color:${m.priority ? 'var(--amber)' : 'var(--dim)'}; font-size:15px">★</button>
               <button class="toggle ${m.enabled ? 'on' : ''}" data-toggle-monitor="${m.id}"><span class="knob"></span></button>
               <button class="btn-ghost" data-delete-monitor="${m.id}">✕</button>
             </div>
@@ -544,6 +565,49 @@ function renderSettings() {
       </div>
     </div>
 
+    <div class="card">
+      <div class="section-label">Budget ciclo</div>
+      <div style="font-size:12px; color:var(--muted); margin-bottom:10px">Monitor controllati per ciclo. Slot prioritari = 33% (automatico).</div>
+      <div class="row" style="gap:12px; margin-bottom:8px">
+        <input type="range" min="5" max="30" step="1" value="${s.budget_per_cycle || 15}" id="set-budget" style="flex:1; accent-color:var(--amber)">
+        <span id="budget-display" style="font-family:monospace; color:var(--amber); width:80px; text-align:right">${s.budget_per_cycle || 15} monitor</span>
+      </div>
+      <div id="budget-slots-preview" style="font-size:11px; color:var(--dim)">
+        Slot prioritari: ${Math.max(1, Math.floor((s.budget_per_cycle || 15) / 3))} · Slot rotazione: ${(s.budget_per_cycle || 15) - Math.max(1, Math.floor((s.budget_per_cycle || 15) / 3))}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row between" style="margin-bottom:8px">
+        <div>
+          <div style="font-size:13px; font-weight:500; color:#fff">Auto-calibrazione AIMD</div>
+          <div style="font-size:11px; color:var(--muted); margin-top:2px">Il sistema impara la frequenza ottimale per ogni marketplace</div>
+        </div>
+        <button class="toggle ${s.autocalibration === '1' ? 'on' : ''}" id="set-autocalibration"><span class="knob"></span></button>
+      </div>
+      <div style="font-size:11px; color:var(--dim)">OFF = delay statico · ON = AIMD adattivo per marketplace</div>
+    </div>
+
+    <div class="card">
+      <div class="section-label">Promemoria priorità</div>
+      <div style="font-size:12px; color:var(--muted); margin-bottom:10px">Giorni dopo un "trovato" prima che il bot chieda se mantenere la priorità.</div>
+      <div class="row" style="gap:8px; align-items:center">
+        <input type="range" min="7" max="90" step="1" value="${s.priority_reminder_days || 30}" id="set-reminder-days" style="flex:1; accent-color:var(--amber)">
+        <span id="reminder-days-display" style="font-family:monospace; color:var(--amber); width:60px; text-align:right">${s.priority_reminder_days || 30}gg</span>
+      </div>
+    </div>
+
+    <div class="card" style="border-color:rgba(239,68,68,0.3)">
+      <div class="section-label" style="color:var(--red)">Zona pericolosa</div>
+      <div class="row between">
+        <div>
+          <div style="font-size:13px; color:#fff">Reset health marketplace</div>
+          <div style="font-size:11px; color:var(--muted); margin-top:2px">Azzera tutti i moltiplicatori AIMD a 1.0 e le statistiche di successo</div>
+        </div>
+        <button class="btn" id="reset-health-btn" style="background:rgba(239,68,68,0.15); color:var(--red); border:1px solid rgba(239,68,68,0.3)">Reset</button>
+      </div>
+    </div>
+
     <button class="btn btn-primary" id="settings-save-btn">Salva impostazioni</button>
   `;
 }
@@ -558,6 +622,17 @@ function attachHandlers() {
     });
 
   // Monitors
+  // Priority toggle
+  document.querySelectorAll("[data-priority-monitor]").forEach(el =>
+    el.onclick = async () => {
+      const id = el.dataset.priorityMonitor;
+      const m = state.monitors.find(x => x.id == id);
+      try {
+        await api(`/api/monitors/${id}`, { method: "PUT", body: JSON.stringify({ priority: !m.priority }) });
+        await loadAll();
+      } catch (e) { toast("⚠️ " + e.message); }
+    });
+
   document.querySelectorAll("[data-toggle-monitor]").forEach(el =>
     el.onclick = async () => {
       const id = el.dataset.toggleMonitor;
@@ -694,14 +769,42 @@ function attachHandlers() {
   if (intervalSlider) intervalSlider.oninput = e =>
     document.getElementById("interval-display").textContent = e.target.value + "s";
 
+  const budgetSlider = document.getElementById("set-budget");
+  if (budgetSlider) budgetSlider.oninput = e => {
+    const v = parseInt(e.target.value);
+    const pSlots = Math.max(1, Math.floor(v / 3));
+    document.getElementById("budget-display").textContent = v + " monitor";
+    document.getElementById("budget-slots-preview").textContent =
+      `Slot prioritari: ${pSlots} · Slot rotazione: ${v - pSlots}`;
+  };
+
+  const reminderSlider = document.getElementById("set-reminder-days");
+  if (reminderSlider) reminderSlider.oninput = e =>
+    document.getElementById("reminder-days-display").textContent = e.target.value + "gg";
+
+  const autocalToggle = document.getElementById("set-autocalibration");
+  if (autocalToggle) autocalToggle.onclick = () => autocalToggle.classList.toggle("on");
+
+  const resetHealthBtn = document.getElementById("reset-health-btn");
+  if (resetHealthBtn) resetHealthBtn.onclick = async () => {
+    if (!confirm("Azzerare tutti i moltiplicatori AIMD? I dati di calibrazione saranno persi.")) return;
+    await api("/api/marketplace-health/reset", { method: "POST", body: JSON.stringify({}) });
+    toast("Health marketplace azzerata ✓");
+    await loadAll();
+  };
+
   const settingsSaveBtn = document.getElementById("settings-save-btn");
   if (settingsSaveBtn) settingsSaveBtn.onclick = async () => {
+    const autocalEl = document.getElementById("set-autocalibration");
     await api("/api/settings", {
       method: "PUT",
       body: JSON.stringify({
         telegram_token: document.getElementById("set-token").value,
         telegram_chat_id: document.getElementById("set-chatid").value,
         poll_interval_seconds: document.getElementById("set-interval").value,
+        budget_per_cycle: document.getElementById("set-budget").value,
+        autocalibration: autocalEl && autocalEl.classList.contains("on") ? "1" : "0",
+        priority_reminder_days: document.getElementById("set-reminder-days").value,
       }),
     });
     toast("Impostazioni salvate ✓");

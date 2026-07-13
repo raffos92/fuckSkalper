@@ -178,6 +178,36 @@ def _cmd_blacklist(msg: dict, name: str = "") -> str:
     return f"🚫 ASIN {asin} bloccato.{label_line}\nNon riceverai più notifiche per questo prodotto."
 
 
+def _cmd_keeppriority() -> str:
+    conn = get_db()
+    conn.execute(
+        "UPDATE monitors SET priority_last_reminded_at=? WHERE priority=1 AND priority_last_found_at IS NOT NULL",
+        (now_iso(),),
+    )
+    conn.commit()
+    conn.close()
+    return "✅ Priorità mantenute. Sarai ricontattato al prossimo prodotto trovato."
+
+
+def _cmd_removepriority(name: str) -> str:
+    name = name.strip()
+    if not name:
+        return "❌ Specifica il nome del monitor: /removepriority Scale Shark"
+    conn = get_db()
+    result = conn.execute(
+        "UPDATE monitors SET priority=0, priority_last_found_at=NULL, priority_last_reminded_at=NULL "
+        "WHERE priority=1 AND name LIKE ?",
+        (f"%{name}%",),
+    )
+    affected = result.rowcount
+    conn.commit()
+    conn.close()
+    if affected:
+        add_log("info", f"Bot: priorità rimossa da '{name}'")
+        return f"✅ Priorità rimossa da '{name}'."
+    return f"❌ Nessun monitor prioritario trovato con nome '{name}'."
+
+
 _HELP = (
     "Comandi disponibili:\n\n"
     "/lista — monitor e pacchetti attivi\n"
@@ -189,7 +219,9 @@ _HELP = (
     "  Keyword: /watch valor bison beyblade x\n"
     "           (il nome coincide con la keyword)\n\n"
     "/blacklist — rispondi a una notifica del bot\n"
-    "           per bloccare quell'ASIN"
+    "           per bloccare quell'ASIN\n\n"
+    "/keeppriority — mantieni tutti i monitor prioritari\n"
+    "/removepriority <nome> — rimuovi la priorità da un monitor"
 )
 
 
@@ -210,6 +242,10 @@ def _dispatch(token: str, chat_id, allowed_chat_id: str, text: str, msg: dict | 
         _send(token, chat_id, _cmd_watch(arg))
     elif cmd == "/blacklist":
         _send(token, chat_id, _cmd_blacklist(msg or {}, arg))
+    elif cmd == "/keeppriority":
+        _send(token, chat_id, _cmd_keeppriority())
+    elif cmd == "/removepriority":
+        _send(token, chat_id, _cmd_removepriority(arg))
     elif cmd in ("/help", "/start"):
         _send(token, chat_id, _HELP)
 
