@@ -12,6 +12,7 @@ from datetime import datetime
 from db import (
     get_db, now_iso, add_log, get_settings,
     get_marketplace_health, update_marketplace_health,
+    add_cycle_run, get_cycle_runs,
 )
 from scraper import build_search_url, build_asin_url, fetch_page, parse_results, parse_product_page, is_captcha_page
 from notifier import send_telegram, format_product_message
@@ -53,7 +54,8 @@ def _check_source(
     settings: dict,
     autocalibration: bool = False,
     is_priority: bool = False,
-):
+) -> tuple:
+    source_start = time.time()
     jobs = _expand_source(source_type, row)
     search_type = row["search_type"] if source_type == "bundle" or row.get("type") == "keyword" else "normal"
     kw = row.get("keyword") if (source_type == "bundle" or row.get("type") == "keyword") else None
@@ -63,21 +65,31 @@ def _check_source(
     had_error = False
     parsed = []
     fetch_errors = []
+    captcha_errors = []
+    timeout_errors = []
     asin_unavailable = []
+    mkt_timings = []  # [{marketplace, delay_applied, fetch_ms, multiplier, outcome}]
 
     for i, job in enumerate(jobs):
+        delay_applied = 0.0
+        multiplier = 1.0
         if i > 0:
             base_delay = random.uniform(2.0, 4.5)
             if autocalibration:
                 multiplier = mkt_health.get(job["marketplace"], {}).get("delay_multiplier", 1.0)
             else:
                 multiplier = 1.0
-            time.sleep(base_delay * multiplier)
+            delay_applied = round(base_delay * multiplier, 2)
+            time.sleep(delay_applied)
 
+        fetch_start = time.time()
         html = fetch_page(job["url"])
+        fetch_ms = int((time.time() - fetch_start) * 1000)
         if html is None:
             had_error = True
             fetch_errors.append(job["marketplace"])
+            timeout_errors.append(job["marketplace"])
+            mkt_timings.append({"mkt": job["marketplace"], "delay_s": delay_applied, "fetch_ms": fetch_ms, "multiplier": multiplier, "outcome": "timeout"})
             if autocalibration:
                 update_marketplace_health(job["marketplace"], success=False, is_priority=is_priority)
             continue
@@ -85,10 +97,13 @@ def _check_source(
             log.warning(f"CAPTCHA rilevato su {job['marketplace']} — trattato come fetch fallita")
             had_error = True
             fetch_errors.append(job["marketplace"])
+            captcha_errors.append(job["marketplace"])
+            mkt_timings.append({"mkt": job["marketplace"], "delay_s": delay_applied, "fetch_ms": fetch_ms, "multiplier": multiplier, "outcome": "captcha"})
             if autocalibration:
                 update_marketplace_health(job["marketplace"], success=False, is_priority=is_priority)
             continue
 
+        mkt_timings.append({"mkt": job["marketplace"], "delay_s": delay_applied, "fetch_ms": fetch_ms, "multiplier": multiplier, "outcome": "ok"})
         if autocalibration:
             update_marketplace_health(job["marketplace"], success=True, is_priority=is_priority)
 
@@ -107,6 +122,7 @@ def _check_source(
 
     conn = get_db()
     is_asin_monitor = source_type == "monitor" and row.get("type") == "asin"
+    absent_threshold = 1 if is_priority else 3
 
     for marketplace, asin in asin_unavailable:
         conn.execute(
@@ -114,8 +130,8 @@ def _check_source(
             (source_type, str(source_id), marketplace, asin),
         )
         conn.execute(
-            "DELETE FROM seen_products WHERE source_type=? AND source_id=? AND marketplace=? AND asin=? AND absent_cycles >= 3",
-            (source_type, str(source_id), marketplace, asin),
+            "DELETE FROM seen_products WHERE source_type=? AND source_id=? AND marketplace=? AND asin=? AND absent_cycles >= ?",
+            (source_type, str(source_id), marketplace, asin, absent_threshold),
         )
 
     if not is_asin_monitor:
@@ -133,8 +149,8 @@ def _check_source(
                 (source_type, str(source_id), marketplace) + current_asins,
             )
             conn.execute(
-                "DELETE FROM seen_products WHERE source_type=? AND source_id=? AND marketplace=? AND absent_cycles >= 3",
-                (source_type, str(source_id), marketplace),
+                "DELETE FROM seen_products WHERE source_type=? AND source_id=? AND marketplace=? AND absent_cycles >= ?",
+                (source_type, str(source_id), marketplace, absent_threshold),
             )
 
     for marketplace, products in parsed:
@@ -176,21 +192,35 @@ def _check_source(
     conn.commit()
     conn.close()
 
+    total_raw_products = sum(len(products) for _, products in parsed)
+
     # Fase 3: log errori + notifiche
-    for mkt in fetch_errors:
-        add_log("error", f"{name} [{mkt}] → fetch fallita (Amazon blocca o timeout)")
+    for mkt in timeout_errors:
+        add_log("error", f"{name} [{mkt}] → fetch fallita — timeout/connessione")
+    for mkt in captcha_errors:
+        add_log("warning", f"{name} [{mkt}] → fetch fallita — CAPTCHA (Amazon blocca)")
 
     for marketplace, p, seen_at in new_for_notify:
-        msg = format_product_message(name, marketplace, p, seen_at)
+        msg = format_product_message(name, marketplace, p, seen_at, is_priority=is_priority)
         ok = send_telegram(settings.get("telegram_token", ""), settings.get("telegram_chat_id", ""), msg)
         add_log("found", f"{name} [{marketplace}] → {p['title'][:60]}")
         if not ok:
             add_log("error", f"Notifica Telegram fallita per {name}")
 
     # Fase 4: aggiorna stato sorgente
+    successful_fetches = len(jobs) - len(fetch_errors)
     all_failed = bool(fetch_errors) and len(fetch_errors) == len(jobs)
     some_failed = bool(fetch_errors) and not all_failed
-    status = "found" if total_new > 0 else ("error" if all_failed else ("warning" if some_failed else "watching"))
+    if total_new > 0:
+        status = "found"
+    elif all_failed:
+        status = "error"
+    elif some_failed:
+        status = "warning"
+    elif total_raw_products == 0 and successful_fetches > 0:
+        status = "empty"
+    else:
+        status = "watching"
     table = "monitors" if source_type == "monitor" else "bundles"
     conn = get_db()
     conn.execute(
@@ -200,7 +230,21 @@ def _check_source(
     conn.commit()
     conn.close()
 
-    return total_new
+    result = {
+        "name": name,
+        "source_type": source_type,
+        "monitor_type": row.get("type", "keyword"),
+        "priority": is_priority,
+        "skipped": False,
+        "mkts_ok": [t["mkt"] for t in mkt_timings if t["outcome"] == "ok"],
+        "mkts_captcha": captcha_errors[:],
+        "mkts_timeout": timeout_errors[:],
+        "products_raw": total_raw_products,
+        "products_new": total_new,
+        "duration_ms": int((time.time() - source_start) * 1000),
+        "mkt_timings": mkt_timings,
+    }
+    return total_new, result
 
 
 def _is_due(row: dict, global_interval: int) -> bool:
@@ -310,28 +354,57 @@ def run_cycle(global_interval: int):
 
     checked = 0
     found_total = 0
+    sources_detail = []
+    cycle_start = time.time()
 
     for i, m in enumerate(priority_to_run):
         if i > 0:
             time.sleep(random.uniform(1.5, 3.0))  # inter-monitor delay (Fix 1)
         checked += 1
-        found_total += _check_source(
+        n, result = _check_source(
             "monitor", str(m["id"]), m["name"], m, settings,
             autocalibration=autocalibration, is_priority=True,
         )
+        found_total += n
+        sources_detail.append(result)
 
     for i, (src_type, src_id, name, row) in enumerate(normal_to_run):
         time.sleep(random.uniform(1.5, 3.0))  # inter-monitor delay (Fix 1)
         checked += 1
-        found_total += _check_source(
+        n, result = _check_source(
             src_type, src_id, name, row, settings,
             autocalibration=autocalibration, is_priority=False,
         )
+        found_total += n
+        sources_detail.append(result)
+
+    # monitor/bundle saltati per budget esaurito
+    for m in priority_due[priority_slots:]:
+        sources_detail.append({"name": m["name"], "priority": True, "skipped": True})
+    for _, _, name, row in normal_due[normal_slots + extra:]:
+        sources_detail.append({"name": name, "priority": bool(row.get("priority")), "skipped": True})
 
     if checked > 0:
         priority_label = f", {len(priority_to_run)} prioritari" if priority_to_run else ""
-        add_log("check", f"Ciclo completato — {checked}/{budget} sorgenti controllate{priority_label}, {found_total} nuovi prodotti")
-        log.info(f"Ciclo completato — {checked}/{budget} sorgenti{priority_label}, {found_total} nuovi prodotti")
+        total_skipped = len(priority_due[priority_slots:]) + len(normal_due[normal_slots + extra:])
+        skip_label = f", {total_skipped} saltati" if total_skipped else ""
+        add_log("check", f"Ciclo completato — {checked}/{budget} sorgenti controllate{priority_label}{skip_label}, {found_total} nuovi prodotti")
+        log.info(f"Ciclo completato — {checked}/{budget} sorgenti{priority_label}{skip_label}, {found_total} nuovi prodotti")
+
+        cycle_end = time.time()
+        add_cycle_run({
+            "started_at": datetime.fromtimestamp(cycle_start).isoformat(timespec="seconds"),
+            "ended_at": datetime.fromtimestamp(cycle_end).isoformat(timespec="seconds"),
+            "duration_seconds": round(cycle_end - cycle_start, 1),
+            "budget": budget,
+            "priority_slots": priority_slots,
+            "priority_ran": len(priority_to_run),
+            "normal_ran": len(normal_to_run),
+            "total_checked": checked,
+            "total_skipped": total_skipped if checked > 0 else 0,
+            "total_found": found_total,
+            "sources_detail": json.dumps(sources_detail),
+        })
 
     _check_priority_reminders(settings)
 

@@ -7,7 +7,7 @@ import json
 import logging
 from flask import Flask, request, jsonify, send_from_directory
 
-from db import init_db, get_db, now_iso, get_settings, set_setting, get_marketplace_health, reset_marketplace_health
+from db import init_db, get_db, now_iso, get_settings, set_setting, get_marketplace_health, reset_marketplace_health, get_cycle_runs
 from marketplaces import MARKETPLACES
 from worker import start_worker_thread
 from bot import start_bot_thread
@@ -294,6 +294,15 @@ def remove_blacklist(asin):
 
 
 # ── Logs & Stats ──────────────────────────────────────────────────────────────
+
+@app.route("/api/cycles")
+def api_cycles():
+    limit = int(request.args.get("limit", 30))
+    runs = get_cycle_runs(limit)
+    for r in runs:
+        r["sources_detail"] = json.loads(r.get("sources_detail") or "[]")
+    return jsonify(runs)
+
 
 @app.route("/api/logs")
 def api_logs():

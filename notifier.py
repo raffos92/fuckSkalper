@@ -27,14 +27,21 @@ def send_telegram(token: str, chat_id: str, message: str) -> bool:
         return False
 
 
-def format_product_message(source_name: str, marketplace: str, product: dict, seen_at: str = "") -> str:
-    badge = "⚡ OFFERTA — " if product.get("is_deal") else ""
-    ts = f"\n🕐 Rilevato alle {seen_at[11:16]}" if seen_at else ""
+def format_product_message(source_name: str, marketplace: str, product: dict, seen_at: str = "", is_priority: bool = False) -> str:
+    is_deal = product.get("is_deal")
+    ts = f" · {seen_at[11:16]}" if seen_at else ""
+
+    if is_deal:
+        header = f"⚡ <b>{source_name} · {marketplace} — OFFERTA</b>"
+    elif is_priority:
+        header = f"🚨🚨 <b>{source_name} · {marketplace}</b>"
+    else:
+        header = f"🛒 <b>{source_name} · {marketplace}</b>"
+
     return (
-        f"🛒 <b>{badge}Prodotto trovato!</b>\n\n"
-        f"📦 <b>{source_name}</b> ({marketplace})\n"
+        f"{header}\n\n"
         f"🏷 {product['title']}\n"
-        f"💴 {product['price']}\n"
+        f"💰 {product['price']}\n"
         f"🔗 <a href=\"{product['url']}\">Apri su Amazon</a>{ts}"
     )
 

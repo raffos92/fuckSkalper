@@ -98,6 +98,21 @@ def init_db():
         delay_multiplier REAL DEFAULT 1.0,
         last_updated TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS cycle_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        started_at TEXT,
+        ended_at TEXT,
+        duration_seconds REAL,
+        budget INTEGER,
+        priority_slots INTEGER,
+        priority_ran INTEGER,
+        normal_ran INTEGER,
+        total_checked INTEGER,
+        total_skipped INTEGER,
+        total_found INTEGER,
+        sources_detail TEXT
+    );
     """)
 
     # Settings di default
@@ -239,3 +254,33 @@ def reset_marketplace_health():
     )
     conn.commit()
     conn.close()
+
+
+def add_cycle_run(data: dict):
+    conn = get_db()
+    conn.execute(
+        """INSERT INTO cycle_runs
+           (started_at, ended_at, duration_seconds, budget, priority_slots,
+            priority_ran, normal_ran, total_checked, total_skipped, total_found, sources_detail)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (data["started_at"], data["ended_at"], data["duration_seconds"],
+         data["budget"], data["priority_slots"], data["priority_ran"],
+         data["normal_ran"], data["total_checked"], data["total_skipped"],
+         data["total_found"], data["sources_detail"]),
+    )
+    conn.execute("""
+        DELETE FROM cycle_runs WHERE id NOT IN (
+            SELECT id FROM cycle_runs ORDER BY id DESC LIMIT 100
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def get_cycle_runs(limit: int = 30) -> list:
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM cycle_runs ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
