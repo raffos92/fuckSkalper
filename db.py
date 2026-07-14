@@ -163,6 +163,7 @@ def init_db():
         "ALTER TABLE monitors ADD COLUMN priority INTEGER DEFAULT 0",
         "ALTER TABLE monitors ADD COLUMN priority_last_found_at TEXT",
         "ALTER TABLE monitors ADD COLUMN priority_last_reminded_at TEXT",
+        "ALTER TABLE monitors ADD COLUMN price_max REAL DEFAULT NULL",
     ]:
         try:
             cur.execute(migration)

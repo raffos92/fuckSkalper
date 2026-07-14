@@ -14,13 +14,18 @@ from db import (
     get_marketplace_health, update_marketplace_health,
     add_cycle_run, get_cycle_runs,
 )
-from scraper import build_search_url, build_asin_url, fetch_page, parse_results, parse_product_page, is_captcha_page
+from scraper import build_search_url, build_asin_url, fetch_page, parse_results, parse_product_page, is_captcha_page, parse_price_eur
 from notifier import send_telegram, format_product_message
 
 log = logging.getLogger("worker")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 _stop_event = threading.Event()
+
+
+def _price_ok(price_str: str, marketplace: str, max_eur: float) -> bool:
+    eur = parse_price_eur(price_str, marketplace)
+    return eur is None or eur <= max_eur
 
 
 def _expand_source(source_type: str, row: dict) -> list[dict]:
@@ -115,6 +120,14 @@ def _check_source(
         else:
             products = parse_results(html, job["url"], search_type, keyword=kw)
         parsed.append((job["marketplace"], products))
+
+    # Filtro prezzo (se price_max configurato)
+    price_max_eur = row.get("price_max")
+    if price_max_eur:
+        parsed = [
+            (mkt, [p for p in prods if _price_ok(p["price"], mkt, price_max_eur)])
+            for mkt, prods in parsed
+        ]
 
     # Fase 2: scrittura DB
     total_new = 0

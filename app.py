@@ -104,11 +104,13 @@ def create_monitor():
     conn = get_db()
     poll_interval = data.get("poll_interval_seconds")
     poll_interval = int(poll_interval) if poll_interval else None
+    price_max = data.get("price_max")
+    price_max = float(price_max) if price_max else None
 
     cur = conn.execute(
         """INSERT INTO monitors
-           (name, type, keyword, url, marketplaces, sold_by_amazon, search_type, enabled, created_at, last_status, poll_interval_seconds, priority)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           (name, type, keyword, url, marketplaces, sold_by_amazon, search_type, enabled, created_at, last_status, poll_interval_seconds, priority, price_max)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             name, mtype,
             data.get("keyword", ""), data.get("url", ""),
@@ -120,6 +122,7 @@ def create_monitor():
             "watching",
             poll_interval,
             int(bool(data.get("priority", False))),
+            price_max,
         ),
     )
     conn.commit()
@@ -158,13 +161,16 @@ def update_monitor(monitor_id):
                 conn.close()
                 return jsonify({"error": f"Limite monitor prioritari raggiunto ({max_slots}/{max_slots}). Rimuovi la priorità da un monitor esistente prima di aggiungerne uno nuovo."}), 400
         fields["priority"] = int(new_priority)
+    if "price_max" in data:
+        fields["price_max"] = float(data["price_max"]) if data["price_max"] else None
 
     conn.execute(
         """UPDATE monitors SET name=?, type=?, keyword=?, url=?, marketplaces=?,
-           sold_by_amazon=?, search_type=?, enabled=?, poll_interval_seconds=?, priority=? WHERE id=?""",
+           sold_by_amazon=?, search_type=?, enabled=?, poll_interval_seconds=?, priority=?, price_max=? WHERE id=?""",
         (fields["name"], fields["type"], fields["keyword"], fields["url"], fields["marketplaces"],
          fields["sold_by_amazon"], fields["search_type"], fields["enabled"],
-         fields.get("poll_interval_seconds"), fields.get("priority", 0), monitor_id),
+         fields.get("poll_interval_seconds"), fields.get("priority", 0),
+         fields.get("price_max"), monitor_id),
     )
     conn.commit()
     conn.close()

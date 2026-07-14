@@ -353,7 +353,9 @@ function renderMonitors() {
             <span class="detail-label">Filtri</span>
             <span class="pill" style="background:${m.sold_by_amazon ? 'rgba(59,130,246,0.15)' : '#252932'}; color:${m.sold_by_amazon ? '#60A5FA' : 'var(--muted)'}">${m.sold_by_amazon ? 'Solo Amazon' : 'Tutti i venditori'}</span>
             <span class="pill" style="background:${m.search_type !== 'normal' ? 'rgba(245,158,11,0.15)' : '#252932'}; color:${m.search_type !== 'normal' ? 'var(--amber)' : 'var(--muted)'}">${m.search_type === 'deals' ? '⚡ Offerte' : m.search_type === 'new' ? '🆕 Novità' : 'Normale'}</span>
+            ${m.price_max ? `<span class="pill" style="background:rgba(139,92,246,0.15); color:#A78BFA">≤ €${m.price_max}</span>` : ''}
           </div>` : ''}
+          ${m.type === 'asin' && m.price_max ? `<div class="detail-row"><span class="detail-label">Filtri</span><span class="pill" style="background:rgba(139,92,246,0.15); color:#A78BFA">≤ €${m.price_max}</span></div>` : ''}
           <div class="row between" style="margin-top:10px; padding-top:10px; border-top:1px solid var(--line)">
             <span style="font-size:11px; color:var(--dim)">Ultimo check: ${m.last_check ? new Date(m.last_check).toLocaleString('it-IT') : 'mai'}</span>
             ${m.found_count > 0 ? `<span class="pill" style="background:rgba(16,185,129,0.1); color:var(--green)">${m.found_count} trovati</span>` : ""}
@@ -365,7 +367,7 @@ function renderMonitors() {
 
 // ── Add Monitor ────────────────────────────────────────────────────────────
 
-let addState = { editId: null, type: "keyword", name: "", keyword: "", url: "", marketplaces: ["JP"], soldByAmazon: true, searchType: "new", pollInterval: "" };
+let addState = { editId: null, type: "keyword", name: "", keyword: "", url: "", marketplaces: ["JP"], soldByAmazon: true, searchType: "new", pollInterval: "", priceMax: "" };
 
 function renderAdd() {
   const mktCodes = Object.keys(MARKETPLACES);
@@ -440,6 +442,16 @@ function renderAdd() {
         ${[["","Usa impostazione globale"],["30","30 secondi"],["60","1 minuto"],["120","2 minuti"],["300","5 minuti"]].map(([val,label]) => `
           <button class="pill" style="cursor:pointer; border:1px solid ${addState.pollInterval===val?'#F59E0B80':'var(--card-border)'}; background:${addState.pollInterval===val?'var(--amber-soft)':'transparent'}; color:${addState.pollInterval===val?'#FCD34D':'#9CA3AF'}; padding:6px 12px" data-add-interval="${val}">${label}</button>
         `).join("")}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-label">Filtro prezzo</div>
+      <div style="font-size:11px; color:var(--muted); margin-bottom:10px">Ignora prodotti oltre questa soglia. Lascia vuoto per disabilitare.</div>
+      <div class="row" style="gap:8px; align-items:center">
+        <span style="font-size:13px; color:var(--muted)">Max EUR</span>
+        <input type="number" id="add-price-max" placeholder="es. 50" min="0" step="0.01" value="${addState.priceMax}"
+          style="width:120px; padding:7px 10px; background:var(--input-bg); border:1px solid var(--card-border); border-radius:8px; color:#fff; font-size:13px">
       </div>
     </div>
 
@@ -760,7 +772,7 @@ function attachHandlers() {
 
   document.querySelectorAll("[data-nav]").forEach(el =>
     el.onclick = () => {
-      if (el.dataset.nav === "add") addState = { editId: null, type: "keyword", name: "", keyword: "", url: "", marketplaces: ["JP"], soldByAmazon: true, searchType: "new", pollInterval: "" };
+      if (el.dataset.nav === "add") addState = { editId: null, type: "keyword", name: "", keyword: "", url: "", marketplaces: ["JP"], soldByAmazon: true, searchType: "new", pollInterval: "", priceMax: "" };
       setSection(el.dataset.nav);
     });
 
@@ -802,6 +814,7 @@ function attachHandlers() {
         soldByAmazon: m.sold_by_amazon,
         searchType: m.search_type,
         pollInterval: m.poll_interval_seconds ? String(m.poll_interval_seconds) : "",
+        priceMax: m.price_max ? String(m.price_max) : "",
       };
       setSection("add");
     });
@@ -856,6 +869,8 @@ function attachHandlers() {
     if (addState.type === "url") addState.url = e.target.value;
     else addState.keyword = e.target.value;
   };
+  const priceMaxInput = document.getElementById("add-price-max");
+  if (priceMaxInput) priceMaxInput.oninput = e => addState.priceMax = e.target.value;
 
   const saveBtn = document.getElementById("add-save-btn");
   if (saveBtn) saveBtn.onclick = async () => {
@@ -868,6 +883,7 @@ function attachHandlers() {
       sold_by_amazon: addState.soldByAmazon,
       search_type: addState.searchType,
       poll_interval_seconds: addState.pollInterval ? parseInt(addState.pollInterval) : null,
+      price_max: addState.priceMax ? parseFloat(addState.priceMax) : null,
     };
     try {
       if (addState.editId) {
@@ -877,7 +893,7 @@ function attachHandlers() {
         await api("/api/monitors", { method: "POST", body: JSON.stringify({ ...payload, enabled: true }) });
         toast("Monitor salvato ✓");
       }
-      addState = { editId: null, type: "keyword", name: "", keyword: "", url: "", marketplaces: ["JP"], soldByAmazon: true, searchType: "new", pollInterval: "" };
+      addState = { editId: null, type: "keyword", name: "", keyword: "", url: "", marketplaces: ["JP"], soldByAmazon: true, searchType: "new", pollInterval: "", priceMax: "" };
       state.section = "monitors";
       await loadAll();
     } catch (e) {

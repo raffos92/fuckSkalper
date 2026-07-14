@@ -55,6 +55,43 @@ SPONSORED_TEXTS = frozenset({
     "sponsored", "sponsorizzato", "gesponsert", "sponsorisé", "スポンサー",
 })
 
+_EUR_RATES: dict[str, float] = {
+    "JP": 162.0,   # ¥ → EUR
+    "IT": 1.0,
+    "DE": 1.0,
+    "FR": 1.0,
+    "UK": 0.85,    # £ → EUR
+    "US": 1.08,    # $ → EUR
+}
+
+
+def parse_price_eur(price_str: str, marketplace: str) -> float | None:
+    """Converte stringa prezzo Amazon in EUR. Ritorna None se non parsabile."""
+    if not price_str or price_str == "—":
+        return None
+    clean = re.sub(r"[^\d,.]", "", price_str.strip())
+    if not clean:
+        return None
+    try:
+        if marketplace == "JP":
+            # ¥2,800 → comma = separatore migliaia, niente decimali
+            amount = float(clean.replace(",", ""))
+        elif marketplace in ("IT", "DE", "FR"):
+            # €1.299,00 → punto=migliaia, virgola=decimale
+            # €15,99   → solo virgola = decimale
+            if "," in clean and "." in clean:
+                clean = clean.replace(".", "").replace(",", ".")
+            else:
+                clean = clean.replace(",", ".")
+            amount = float(clean)
+        else:
+            # US, UK: $19.99 o £1,299.99 → punto=decimale, virgola=migliaia
+            amount = float(clean.replace(",", ""))
+    except ValueError:
+        return None
+    rate = _EUR_RATES.get(marketplace, 1.0)
+    return round(amount / rate, 2)
+
 
 def build_asin_url(asin: str, marketplace_code: str) -> str:
     mkt = MARKETPLACES[marketplace_code]
