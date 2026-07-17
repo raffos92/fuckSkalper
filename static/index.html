@@ -942,7 +942,17 @@ function attachHandlers() {
     document.getElementById("reminder-days-display").textContent = e.target.value + "gg";
 
   const autocalToggle = document.getElementById("set-autocalibration");
-  if (autocalToggle) autocalToggle.onclick = () => autocalToggle.classList.toggle("on");
+  if (autocalToggle) autocalToggle.onclick = async () => {
+    autocalToggle.classList.toggle("on");
+    const isOn = autocalToggle.classList.contains("on");
+    try {
+      await api("/api/settings", { method: "PUT", body: JSON.stringify({ autocalibration: isOn ? "1" : "0" }) });
+      state.settings.autocalibration = isOn ? "1" : "0";
+      toast(isOn ? "Auto-calibrazione attivata ✓" : "Auto-calibrazione disattivata");
+    } catch (e) {
+      autocalToggle.classList.toggle("on"); // revert on error
+    }
+  };
 
   const resetHealthBtn = document.getElementById("reset-health-btn");
   if (resetHealthBtn) resetHealthBtn.onclick = async () => {
